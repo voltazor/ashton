@@ -13,8 +13,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-c, --command', dest='command', type=str, help='Command that should be executed on hook', required=True)
-parser.add_argument('-p, --port', dest='port', type=int, help='Port to listen for incoming hooks', default=3000)
+parser.add_argument('-c', '--command', dest='command', type=str, help='Command that should be executed on hook', required=True)
+parser.add_argument('-p', '--port', dest='port', type=int, help='Port to listen for incoming hooks', default=3000)
 parser.add_argument('--silent', dest='silent', help='Service will produce no logs', default=False, action='store_true')
 parser.add_argument('--detailed-logs', dest='detailed_logs', help='Service will produce detailed logs', default=False, action='store_true')
 parser.description = 'Listens a specified port for POST requests to catch webhooks from Docker Hub. A valid webhook will trigger the execution of a specified command.' 
@@ -31,29 +31,29 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
             if (self.path != '/'):
                 raise Exception('Invalid request: %s [%s:%i]' % (self.path, self.client_address[0], self.client_address[1]))
             
-            printWithTime('Received request [%s:%i]' % (self.client_address))
+            logWithTime('Received request [%s:%i]' % (self.client_address))
 
             if (args.detailed_logs):
-                print('\n%s [%s]' % (self.requestline, self.log_date_time_string()))
-                print(self.headers)
+                print('\n%s [%s]' % (self.requestline, self.log_date_time_string()), flush=True)
+                print(self.headers, flush=True)
 
             conentLength = int(self.headers.get('Content-Length'))
             body = self.rfile.read(conentLength).decode('utf-8')
                 
             if (args.detailed_logs):
-                print(body)
-                print()
+                print(body, flush=True)
+                print(flush=True)
             self.respondSuccess()
 
             request = json.loads(body)
             callback_url = request['callback_url']
 
-            printWithTime('Webhook is valid. Processing..')
+            logWithTime('Webhook is valid. Processing..')
             Thread(target=handleRequest, args=(callback_url,)).start()    
                 
         except Exception as e:
-            printWithTime(repr(e))
-            print('---')
+            logWithTime(repr(e))
+            print('---', flush=True)
             self.respondFailure()
 
     def respondSuccess(self):
@@ -70,23 +70,23 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args):
         ...
 
-def printWithTime(message=str):
+def logWithTime(message=str):
     current_time = time.strftime("%H:%M:%S", time.localtime())
-    print('%s %s  %s' % (datetime.date.today(), current_time, message))
+    print('%s %s  %s' % (datetime.date.today(), current_time, message), flush=True)
 
 def handleRequest(callback_url:str):
     callbackCall = 'curl --silent --output /dev/null %s' % callback_url
     if (systemCall(callbackCall)):
-        printWithTime('Callback [%s] sent' % callback_url)
+        logWithTime('Callback [%s] sent' % callback_url)
     else:
-        printWithTime('Callback [%s] failed' % callback_url)
+        logWithTime('Callback [%s] failed' % callback_url)
 
     call = '%s >> /dev/null' % args.command
     if (systemCall(call)):
-        printWithTime('Command done')
+        logWithTime('Command done')
     else:
-        printWithTime('Command failed')
-    print('---')
+        logWithTime('Command failed')
+    print('---', flush=True)
 
 def systemCall(command):
     try:
@@ -98,9 +98,9 @@ def systemCall(command):
 
 def gracefull_KeyboardInterrupt():
     def graceFullShutdown():
-        print()
+        print(flush=True)
         print('\r' '\033[2K' '\033[A', end='', flush=True)
-        printWithTime('Shutting down..\n')
+        logWithTime('Shutting down..\n')
         exit(0)
     sys.excepthook = lambda type, value, traceback: (
         graceFullShutdown()
@@ -117,9 +117,9 @@ def main():
         os.dup2(se.fileno(), sys.stderr.fileno())
 
     with HTTPServer(("", args.port), HTTPRequestHandler) as httpd:
-        print('--------------------')
-        print('Serving at port', args.port)
-        print('--------------------')
+        print('--------------------', flush=True)
+        print('Serving at port', args.port, flush=True)
+        print('--------------------', flush=True)
         httpd.serve_forever()
 
 main()
