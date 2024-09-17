@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import time
+import json
+import shlex
+import argparse
+import datetime
+from threading import Thread
+from subprocess import check_output, CalledProcessError, STDOUT
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-c, --command', dest='command', type=str, help='Command that should be executed on hook', required=True)
+parser.add_argument('-p, --port', dest='port', type=int, help='Port to listen for incoming hooks', default=3000)
+parser.add_argument('--silent', dest='silent', help='Service will produce no logs', default=False, action='store_true')
+parser.add_argument('--detailed-logs', dest='detailed_logs', help='Service will produce detailed logs', default=False, action='store_true')
+parser.description = 'Listens a specified port for POST requests to catch webhooks from Docker Hub. A valid webhook will trigger the execution of a specified command.' 
+
+if (len(sys.argv) <= 1):
+    parser.print_help()
+    exit(1)
+else:
+    args = parser.parse_args()
+
+class HTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            if (self.path != '/'):
+                raise Exception('Invalid request: %s [%s:%i]' % (self.path, self.client_address[0], self.client_address[1]))
+            
+            printWithTime('Received request [%s:%i]' % (self.client_address))
+
+            if (args.detailed_logs):
+                print('\n%s [%s]' % (self.requestline, self.log_date_time_string()))
+                print(self.headers)
+
+            conentLength = int(self.headers.get('Content-Length'))
+            body = self.rfile.read(conentLength).decode('utf-8')
+                
+            if (args.detailed_logs):
+                print(body)
+                print()
+            self.respondSuccess()
+
+            request = json.loads(body)
+            callback_url = request['callback_url']
+
+            printWithTime('Webhook is valid. Processing..')
+            Thread(target=handleRequest, args=(callback_url,)).start()    
+                
+        except Exception as e:
+            printWithTime(repr(e))
+            print('---')
+            self.respondFailure()
+
+    def respondSuccess(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{\n\t"result": "OK"\n}')
+
+    def respondFailure(self):
+        self.send_response(500)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+
+    def log_message(self, format: str, *args):
+        ...
+
+def printWithTime(message=str):
+    current_time = time.strftime("%H:%M:%S", time.localtime())
+    print('%s %s  %s' % (datetime.date.today(), current_time, message))
+
+def handleRequest(callback_url:str):
+    callbackCall = 'curl --silent --output /dev/null %s' % callback_url
+    if (systemCall(callbackCall)):
+        printWithTime('Callback [%s] sent' % callback_url)
+    else:
+        printWithTime('Callback [%s] failed' % callback_url)
+
+    call = '%s >> /dev/null' % args.command
+    if (systemCall(call)):
+        printWithTime('Command done')
+    else:
+        printWithTime('Command failed')
+    print('---')
+
+def systemCall(command):
+    try:
+        check_output(shlex.split(command), stderr=STDOUT)
+        success = True 
+    except CalledProcessError as e:
+        success = False
+    return success
+
+def gracefull_KeyboardInterrupt():
+    def graceFullShutdown():
+        print()
+        print('\r' '\033[2K' '\033[A', end='', flush=True)
+        printWithTime('Shutting down..\n')
+        exit(0)
+    sys.excepthook = lambda type, value, traceback: (
+        graceFullShutdown()
+        if issubclass(type, KeyboardInterrupt)
+        else None
+    )
+
+def main():
+    gracefull_KeyboardInterrupt()
+    if (args.silent):
+        so = open(os.devnull, 'w')
+        se = open(os.devnull, 'w')
+        os.dup2(so.fileno(), sys.stdout.fileno())
+        os.dup2(se.fileno(), sys.stderr.fileno())
+
+    with HTTPServer(("", args.port), HTTPRequestHandler) as httpd:
+        print('--------------------')
+        print('Serving at port', args.port)
+        print('--------------------')
+        httpd.serve_forever()
+
+main()
