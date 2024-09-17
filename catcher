@@ -116,10 +116,13 @@ def main():
         os.dup2(so.fileno(), sys.stdout.fileno())
         os.dup2(se.fileno(), sys.stderr.fileno())
 
-    with HTTPServer(("", args.port), HTTPRequestHandler) as httpd:
+    try:
+        httpd = HTTPServer(("", args.port), HTTPRequestHandler)
         print('--------------------', flush=True)
         print('Serving at port', args.port, flush=True)
         print('--------------------', flush=True)
         httpd.serve_forever()
+    except Exception as e:
+        print(repr(e), flush=True)
 
 main()
