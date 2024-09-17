@@ -8,7 +8,7 @@ import shlex
 import argparse
 import datetime
 from threading import Thread
-from subprocess import check_output, CalledProcessError, STDOUT
+from subprocess import run, check_output, CalledProcessError, STDOUT, PIPE
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
@@ -75,24 +75,27 @@ def logWithTime(message=str):
     print('%s %s  %s' % (datetime.date.today(), current_time, message), flush=True)
 
 def handleRequest(callback_url:str):
-    callbackCall = 'curl --silent --output /dev/null %s' % callback_url
-    if (systemCall(callbackCall)):
+    callbackCall = 'curl %s' % callback_url
+    if (systemCall(callbackCall, with_ouput = args.detailed_logs)):
         logWithTime('Callback [%s] sent' % callback_url)
     else:
         logWithTime('Callback [%s] failed' % callback_url)
 
-    call = '%s >> /dev/null' % args.command
-    if (systemCall(call)):
+    logWithTime('Executing command..')
+    if (systemCall(args.command, with_ouput = args.detailed_logs)):
         logWithTime('Command done')
     else:
         logWithTime('Command failed')
     print('---', flush=True)
 
-def systemCall(command):
+def systemCall(command=str, with_ouput:bool = True):
     try:
-        check_output(shlex.split(command), stderr=STDOUT)
+        output = check_output(shlex.split(command), stderr=STDOUT)
+        if (with_ouput):
+            print(output.decode('utf-8'), flush=True)
         success = True 
     except CalledProcessError as e:
+        print(repr(e), flush=True)
         success = False
     return success
 
