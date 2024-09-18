@@ -28,17 +28,19 @@ else:
 class HTTPRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
+            real_ip = self.headers.get('X-Real-IP')
+            client_address = real_ip if real_ip != None else ('%s:%i' % (self.client_address[0], self.client_address[1]))
             if (self.path != '/'):
-                raise Exception('Invalid request: %s [%s:%i]' % (self.path, self.client_address[0], self.client_address[1]))
+                raise Exception('Invalid request: %s [%s]' % (self.path, client_address))
             
-            logWithTime('Received request [%s:%i]' % (self.client_address))
+            logWithTime('Received request [%s]' % (client_address))
 
             if (args.detailed_logs):
                 print('\n%s [%s]' % (self.requestline, self.log_date_time_string()), flush=True)
                 print(self.headers, flush=True)
 
-            conentLength = int(self.headers.get('Content-Length'))
-            body = self.rfile.read(conentLength).decode('utf-8')
+            conent_length = int(self.headers.get('Content-Length'))
+            body = self.rfile.read(conent_length).decode('utf-8')
                 
             if (args.detailed_logs):
                 print(body, flush=True)
@@ -48,7 +50,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
             request = json.loads(body)
             callback_url = request['callback_url']
 
-            logWithTime('Webhook is valid. Processing..')
+            logWithTime('Callback URL found. Processing..')
             Thread(target=handleRequest, args=(callback_url,)).start()    
                 
         except Exception as e:
@@ -58,13 +60,13 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
 
     def respondSuccess(self):
         self.send_response(200)
-        self.send_header('Content-type', 'application/json')
+        self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(b'{\n\t"result": "OK"\n}')
 
     def respondFailure(self):
         self.send_response(500)
-        self.send_header('Content-type', 'application/json')
+        self.send_header('Content-Type', 'application/json')
         self.end_headers()
 
     def log_message(self, format: str, *args):
@@ -75,8 +77,8 @@ def logWithTime(message=str):
     print('%s %s  %s' % (datetime.date.today(), current_time, message), flush=True)
 
 def handleRequest(callback_url:str):
-    callbackCall = 'curl %s' % callback_url
-    if (systemCall(callbackCall, with_ouput = args.detailed_logs)):
+    callback_call = 'curl --silent -f %s' % callback_url
+    if (systemCall(callback_call, with_ouput = args.detailed_logs)):
         logWithTime('Callback [%s] sent' % callback_url)
     else:
         logWithTime('Callback [%s] failed' % callback_url)
@@ -92,6 +94,7 @@ def systemCall(command=str, with_ouput:bool = True):
     try:
         output = check_output(shlex.split(command), stderr=STDOUT)
         if (with_ouput):
+            print()
             print(output.decode('utf-8'), flush=True)
         success = True 
     except CalledProcessError as e:
@@ -101,7 +104,7 @@ def systemCall(command=str, with_ouput:bool = True):
 
 def gracefull_KeyboardInterrupt():
     def graceFullShutdown():
-        print(flush=True)
+        print()
         print('\r' '\033[2K' '\033[A', end='', flush=True)
         logWithTime('Shutting down..\n')
         exit(0)
