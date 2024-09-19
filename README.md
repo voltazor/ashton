@@ -1,7 +1,7 @@
-# Catcher
+# Ashton
 
 Wery basic utility server that listen port for incoming POST requests.
-Serves for webhooks handling from Docker Hub.
+Serves for webhooks handling.
 
 After receiving request, invokes `callback_url` and runs `command`.
 
