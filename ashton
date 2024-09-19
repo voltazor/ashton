@@ -17,7 +17,7 @@ parser.add_argument('-c', '--command', dest='command', type=str, help='Command t
 parser.add_argument('-p', '--port', dest='port', type=int, help='Port to listen for incoming hooks', default=3000)
 parser.add_argument('--silent', dest='silent', help='Service will produce no logs', default=False, action='store_true')
 parser.add_argument('--detailed-logs', dest='detailed_logs', help='Service will produce detailed logs', default=False, action='store_true')
-parser.description = 'Listens a specified port for POST requests to catch webhooks from Docker Hub. A valid webhook will trigger the execution of a specified command.' 
+parser.description = 'Listens a specified port for POST requests to catch a webhook. A valid webhook will trigger the execution of a specified command.' 
 
 if (len(sys.argv) <= 1):
     parser.print_help()
