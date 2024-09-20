@@ -3,55 +3,105 @@
 import os
 import sys
 import time
-import json
+import hmac
 import shlex
+import hashlib
 import argparse
 import datetime
 from threading import Thread
-from subprocess import run, check_output, CalledProcessError, STDOUT, PIPE
+from subprocess import check_output, CalledProcessError, STDOUT
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument('-c', '--command', dest='command', type=str, help='Command that should be executed on hook', required=True)
-parser.add_argument('-p', '--port', dest='port', type=int, help='Port to listen for incoming hooks', default=3000)
+parser = argparse.ArgumentParser(exit_on_error=False)
+parser.add_argument('-p', '--port', dest='port', type=int, help='[REQUIRED] Port to listen for incoming hooks', required=True, default=None)
+parser.add_argument('-c', '--command', dest='command', type=str, help='[REQUIRED] Command that will be executed by webhook', required=True, default=None)
+parser.add_argument('--env-file', dest='env_file', type=str, help='File with arguments specified in KEY=VALUE format', default=None)
+parser.add_argument('-s', '--secret', dest='secret', type=str, help='Secret to validate webhook sha256 signature', default=None)
+parser.add_argument('--signature-header', dest='signature_header', type=str, help='Header that contains sha256 signature', default='X-Hub-Signature-256')
+parser.add_argument('--pre-command', dest='pre_command', type=str, help='Command that should be executed before COMMAND', default=None)
+parser.add_argument('--post-command', dest='post_command', type=str, help='Command that should be executed after COMMAND', default=None)
+parser.add_argument('--ignore-payload', dest='ignore_payload', help='Commands won\'t receive payload as an argument', default=False, action='store_true')
 parser.add_argument('--silent', dest='silent', help='Service will produce no logs', default=False, action='store_true')
 parser.add_argument('--detailed-logs', dest='detailed_logs', help='Service will produce detailed logs', default=False, action='store_true')
-parser.description = 'Listens a specified port for POST requests to catch a webhook. A valid webhook will trigger the execution of a specified command.' 
 
-if (len(sys.argv) <= 1):
-    parser.print_help()
-    exit(1)
+parser.description = '''Listens on a specified `--port` for POST requests to catch a webhooks. Webhook request could include a `--signature-header`, than `--secret` required to lavidate payload. 
+A valid webhook triggers the execution of a specified commands. `--pre-command` and `--post-command` are executed before and after the `--command` respectively (suitable for webhook callback). 
+Commands will get payload as an argument unless `--ignore-payload` specified. Command failure won't interrupt sequence! Arguments can be specified in a file provided by `--env-file`. 
+Command-line arguments will take precedence over those from the file.'''
+
+def parse_env_file(file_path):
+    vars = {}
+    try:
+        with open(file_path, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if not line or line.startswith('#'): continue
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    vars[key.strip().lower()] = value.strip()
+    except Exception as e:
+        print(f'The file {file_path} cannot be read!')
+    return vars
+
+if len(sys.argv) <= 1:
+    parser.print_usage()
+    exit(2)
 else:
-    args = parser.parse_args()
+    vars = list(sys.argv)
+    args = argparse.Namespace()
+    try:
+        parser.parse_known_args(vars, args)
+    except argparse.ArgumentError:
+        ...   
+
+    if args.env_file:
+        vars = parse_env_file(args.env_file)
+        for key, value in vars.items():
+            if getattr(args, key, None) in [None, parser.get_default(key)]:
+                if key in ['port']:
+                    value = int(value)
+                elif key in ['silent', 'detailed_logs']:
+                    value = value.lower() in ['true', '1', 'yes']
+                setattr(args, key, value)
+    
+    missing_args = []
+    if not args.port: missing_args.append('-p/-port')
+    if not args.command: missing_args.append('-c/-command')
+        
+    if missing_args:
+        print(f"The following argument(s) are required: {', '.join(missing_args)}")
+        exit(1)
 
 class HTTPRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             real_ip = self.headers.get('X-Real-IP')
             client_address = real_ip if real_ip != None else ('%s:%i' % (self.client_address[0], self.client_address[1]))
-            if (self.path != '/'):
+            if self.path != '/':
                 raise Exception('Invalid request: %s [%s]' % (self.path, client_address))
             
             logWithTime('Received request [%s]' % (client_address))
 
-            if (args.detailed_logs):
+            if args.detailed_logs:
                 print('\n%s [%s]' % (self.requestline, self.log_date_time_string()), flush=True)
                 print(self.headers, flush=True)
 
             conent_length = int(self.headers.get('Content-Length'))
-            body = self.rfile.read(conent_length).decode('utf-8')
-                
-            if (args.detailed_logs):
-                print(body, flush=True)
+            body = self.rfile.read(conent_length)
+            
+            payload = body.decode('utf-8')
+            if args.detailed_logs:
+                print(payload, flush=True)
                 print(flush=True)
-            self.respondSuccess()
 
-            request = json.loads(body)
-            callback_url = request['callback_url']
+            if args.secret:
+                signature_header = self.headers.get(args.signature_header)
+                verifyPayload(body, args.secret, signature_header)
 
-            logWithTime('Callback URL found. Processing..')
-            Thread(target=handleRequest, args=(callback_url,)).start()    
+            self.respondSuccess()    
+
+            logWithTime('Webhook signature valid. Processing..')
+            Thread(target=handleRequest, args=(payload,)).start()    
                 
         except Exception as e:
             logWithTime(repr(e))
@@ -72,27 +122,60 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args):
         ...
 
+def verifyPayload(payload_body, secret, signature_header):
+    if (not signature_header):
+        raise Exception(f"{args.signature_header} header is missing!")
+    
+    hash_object = hmac.new(secret.encode('utf-8'), msg=payload_body, digestmod=hashlib.sha256)
+    expected_signature = "sha256=" + hash_object.hexdigest()
+
+    if (not hmac.compare_digest(expected_signature, signature_header)):
+        print(expected_signature)
+        raise Exception("Request signatures didn't match!")
+
 def logWithTime(message=str):
     current_time = time.strftime("%H:%M:%S", time.localtime())
     print('%s %s  %s' % (datetime.date.today(), current_time, message), flush=True)
 
-def handleRequest(callback_url:str):
-    callback_call = 'curl --silent -f %s' % callback_url
-    if (systemCall(callback_call, with_ouput = args.detailed_logs)):
-        logWithTime('Callback [%s] sent' % callback_url)
-    else:
-        logWithTime('Callback [%s] failed' % callback_url)
+def handleRequest(payload:str):
+    try:
+        if (args.pre_command):
+            logWithTime('Executing pre-command..')
+            if (executeCommand(args.pre_command, payload)):
+                logWithTime('Pre-command done')
+            else:
+                logWithTime('Pre-command failed')
 
-    logWithTime('Executing command..')
-    if (systemCall(args.command, with_ouput = args.detailed_logs)):
-        logWithTime('Command done')
-    else:
-        logWithTime('Command failed')
+        logWithTime('Executing command..')
+        if (executeCommand(args.command, payload)):
+            logWithTime('Command done')
+        else:
+            logWithTime('Command failed')
+
+        if (args.post_command):
+            logWithTime('Executing post-command..')
+            if (executeCommand(args.post_command, payload)):
+                logWithTime('Post-command done')
+            else:
+                logWithTime('Post-command failed')
+    except Exception as e:
+        logWithTime(repr(e))
+
     print('---', flush=True)
 
-def systemCall(command=str, with_ouput:bool = True):
+def executeCommand(command:str, payload:str):
+    call = shlex.split(command)
+    if not args.ignore_payload:
+        call.append(payload)
+    
+    if (systemCall(call, with_ouput = args.detailed_logs)):
+        return True
+    else:
+        return False
+
+def systemCall(command:list[str], with_ouput:bool = True):
     try:
-        output = check_output(shlex.split(command), stderr=STDOUT)
+        output = check_output(command, stderr=STDOUT)
         if (with_ouput):
             print()
             print(output.decode('utf-8'), flush=True)
