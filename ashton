@@ -101,7 +101,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
             self.respondSuccess()    
 
             logWithTime('Webhook signature valid. Processing..')
-            Thread(target=handleRequest, args=(payload,)).start()    
+            Thread(target=handleRequest, args=(payload.replace(" ", "").replace("\n", ""),)).start()
                 
         except Exception as e:
             logWithTime(repr(e))
